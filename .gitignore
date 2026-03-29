@@ -117,3 +117,5 @@ logs/
 *.p12
 secrets.yaml
 config/local.yaml
+CLAUDE.md
+COMMIT_SCHEDULE.md
