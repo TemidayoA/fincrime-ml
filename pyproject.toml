@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "fincrime-ml"
+version = "0.1.0"
+description = "Dual-domain ML framework for financial crime detection — fraud and AML transaction monitoring"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Temidayo Akindahunsi", email = "ray@example.com" }]
+keywords = ["fraud detection", "aml", "financial crime", "machine learning", "transaction monitoring"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.1.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "xgboost>=2.0.0",
+    "shap>=0.44.0",
+    "networkx>=3.2.0",
+    "faker>=22.0.0",
+    "sqlalchemy>=2.0.0",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "imbalanced-learn>=0.12.0",
+    "pydantic>=2.5.0",
+    "rich>=13.7.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.12.0",
+    "ruff>=0.1.0",
+    "pre-commit>=3.6.0",
+    "ipykernel>=6.29.0",
+    "jupyter>=1.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/rayakindahunsi/fincrime-ml"
+Documentation = "https://github.com/rayakindahunsi/fincrime-ml/wiki"
+"Bug Tracker" = "https://github.com/rayakindahunsi/fincrime-ml/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fincrime_ml*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=fincrime_ml --cov-report=term-missing --cov-fail-under=80"
+
+[tool.coverage.run]
+omit = ["tests/*", "notebooks/*", "scripts/*"]
