@@ -6,18 +6,19 @@ Synthetic card and payment transaction generator for FinCrime-ML.
 Generates realistic transaction data with:
     - Card payment transactions (POS, CNP, contactless)
     - Wire/SWIFT transfers with BIC/IBAN identifiers
-    - Digital payment channels (mobile, e-commerce)
+    - Digital payment channels (Open Banking, BNPL, digital wallets, crypto off-ramps)
     - Configurable fraud typology injection
 
 No real customer data is used or required. All records are synthetically
 generated using statistical distributions calibrated to published industry
-benchmarks (UK Finance Fraud Report, BIS CPMI payment statistics).
+benchmarks (UK Finance Fraud Report, BIS CPMI payment statistics, PSR 2017 / PSD2).
 
 Usage:
     from fincrime_ml.core.data.synth_cards import SyntheticTransactionGenerator
 
     gen = SyntheticTransactionGenerator(n_accounts=5000, seed=42)
     df = gen.generate(n_transactions=50_000, fraud_rate=0.015)
+    digital = gen.generate_digital_payments(n=10_000)
 
 Author: Temidayo Akindahunsi
 """
@@ -84,7 +85,57 @@ COUNTRY_CORRIDORS: dict[str, float] = {
     "OTHER": 0.08,
 }
 
-ChannelType = Literal["POS", "CNP_ECOM", "CNP_MOTO", "CONTACTLESS", "WIRE", "MOBILE_APP"]
+ChannelType = Literal[
+    "POS",
+    "CNP_ECOM",
+    "CNP_MOTO",
+    "CONTACTLESS",
+    "WIRE",
+    "MOBILE_APP",
+    "OPEN_BANKING",
+    "BNPL",
+    "CRYPTO_OFFRAMP",
+    "DIGITAL_WALLET",
+]
+
+# ---------------------------------------------------------------------------
+# Digital payment providers and their associated fraud risk profiles
+# Sources: PSR 2017 / PSD2, FCA APP fraud data, UK Finance 2023
+# ---------------------------------------------------------------------------
+DIGITAL_PAYMENT_PROVIDERS: dict[str, dict] = {
+    "Revolut": {"type": "digital_wallet", "fraud_risk": "medium", "3ds_rate": 0.72},
+    "Monzo": {"type": "digital_wallet", "fraud_risk": "low", "3ds_rate": 0.81},
+    "PayPal": {"type": "digital_wallet", "fraud_risk": "medium", "3ds_rate": 0.68},
+    "Apple Pay": {"type": "digital_wallet", "fraud_risk": "low", "3ds_rate": 0.95},
+    "Google Pay": {"type": "digital_wallet", "fraud_risk": "low", "3ds_rate": 0.94},
+    "Klarna": {"type": "bnpl", "fraud_risk": "high", "3ds_rate": 0.55},
+    "Clearpay": {"type": "bnpl", "fraud_risk": "high", "3ds_rate": 0.52},
+    "Laybuy": {"type": "bnpl", "fraud_risk": "high", "3ds_rate": 0.50},
+    "TrueLayer": {"type": "open_banking", "fraud_risk": "low", "3ds_rate": 0.99},
+    "Plaid": {"type": "open_banking", "fraud_risk": "low", "3ds_rate": 0.98},
+    "Coinbase": {"type": "crypto_offramp", "fraud_risk": "high", "3ds_rate": 0.60},
+    "Binance": {"type": "crypto_offramp", "fraud_risk": "high", "3ds_rate": 0.55},
+    "Kraken": {"type": "crypto_offramp", "fraud_risk": "high", "3ds_rate": 0.58},
+}
+
+DIGITAL_PAYMENT_SCHEMA_COLS = [
+    "payment_id",
+    "account_id",
+    "provider",
+    "payment_type",
+    "amount_gbp",
+    "currency",
+    "ip_country",
+    "device_type",
+    "is_3ds_authenticated",
+    "provider_fraud_risk",
+    "timestamp",
+    "hour_of_day",
+    "day_of_week",
+    "is_weekend",
+    "is_international_ip",
+    "is_fraud",
+]
 
 
 @dataclass
@@ -284,6 +335,100 @@ class SyntheticTransactionGenerator:
 
         return pd.DataFrame(records)
 
+    def generate_digital_payments(
+        self,
+        n: int = 10_000,
+        fraud_rate: float = 0.018,
+    ) -> pd.DataFrame:
+        """Generate synthetic digital payment records covering Open Banking, BNPL,
+        digital wallets, and crypto off-ramps.
+
+        Digital payment fraud characteristics modelled here:
+            - BNPL fraud: higher amounts, lower 3DS authentication rates
+            - Crypto off-ramp fraud: typically large amounts, mismatched IP country
+            - Open Banking (PSD2): very low fraud, near-universal 3DS
+            - Digital wallet fraud: device fingerprint anomalies
+
+        Regulatory context: PSR 2017 / PSD2 mandates Strong Customer Authentication
+        (SCA) for electronic payments. The ``is_3ds_authenticated`` field signals
+        SCA compliance; fraudulent transactions have systematically lower rates.
+
+        Args:
+            n: Number of digital payment records to generate.
+            fraud_rate: Target proportion of fraudulent transactions.
+
+        Returns:
+            DataFrame with columns defined in DIGITAL_PAYMENT_SCHEMA_COLS.
+        """
+        n_fraud = int(n * fraud_rate)
+
+        providers = list(DIGITAL_PAYMENT_PROVIDERS.keys())
+        provider_weights = [1.0] * len(providers)  # uniform provider distribution
+        provider_weights_arr = np.array(provider_weights) / sum(provider_weights)
+
+        device_types = ["mobile", "desktop", "tablet"]
+        device_weights = [0.62, 0.30, 0.08]
+
+        records = []
+        for i in range(n):
+            is_fraud = i < n_fraud
+            provider_name = self._rng.choice(providers, p=provider_weights_arr)
+            provider_meta = DIGITAL_PAYMENT_PROVIDERS[provider_name]
+
+            # Fraud: lower 3DS rate (SCA bypass), inflated amounts, IP mismatch
+            if is_fraud:
+                base_3ds = provider_meta["3ds_rate"]
+                is_authenticated = bool(self._rng.random() < (base_3ds * 0.35))
+                amount = float(self._rng.lognormal(mean=5.2, sigma=0.9))
+                amount = min(round(amount, 2), 8_000)
+                ip_country = self._rng.choice(
+                    ["RU", "IR", "KP", "OTHER", "CN"],
+                    p=[0.25, 0.20, 0.10, 0.35, 0.10],
+                )
+            else:
+                is_authenticated = bool(self._rng.random() < provider_meta["3ds_rate"])
+                amount = float(self._rng.lognormal(mean=4.1, sigma=0.7))
+                amount = min(round(amount, 2), 2_000)
+                ip_country = self._rng.choice(
+                    list(COUNTRY_CORRIDORS.keys()),
+                    p=np.array(list(COUNTRY_CORRIDORS.values())) / sum(COUNTRY_CORRIDORS.values()),
+                )
+
+            ts = self._random_timestamp()
+            records.append(
+                {
+                    "payment_id": "DPY-"
+                    + "".join(self._rng.choice(list(string.ascii_uppercase), size=10)),
+                    "account_id": self.accounts.sample(n=1, random_state=i)["account_id"].iloc[0],
+                    "provider": provider_name,
+                    "payment_type": provider_meta["type"],
+                    "amount_gbp": amount,
+                    "currency": self.config.currency,
+                    "ip_country": ip_country,
+                    "device_type": self._rng.choice(device_types, p=device_weights),
+                    "is_3ds_authenticated": int(is_authenticated),
+                    "provider_fraud_risk": provider_meta["fraud_risk"],
+                    "timestamp": ts,
+                    "hour_of_day": ts.hour,
+                    "day_of_week": ts.weekday(),
+                    "is_weekend": int(ts.weekday() in (5, 6)),
+                    "is_international_ip": int(ip_country not in ("GB", "OTHER")),
+                    "is_fraud": int(is_fraud),
+                }
+            )
+
+        df = (
+            pd.DataFrame(records)
+            .sample(frac=1, random_state=self.config.seed)
+            .reset_index(drop=True)
+        )
+        logger.info(
+            "generate_digital_payments: %d records, fraud rate: %.3f%%",
+            len(df),
+            df["is_fraud"].mean() * 100,
+        )
+        return df[DIGITAL_PAYMENT_SCHEMA_COLS]
+
     # ------------------------------------------------------------------
     # Private: account population
     # ------------------------------------------------------------------
@@ -385,16 +530,14 @@ class SyntheticTransactionGenerator:
 
         # Fraud transactions: higher amounts, more international, unusual hours
         if is_fraud:
-            amounts = (
-                account_sample["account_avg_spend"].values
-                * self._rng.lognormal(mean=1.2, sigma=0.6, size=n)
+            amounts = account_sample["account_avg_spend"].values * self._rng.lognormal(
+                mean=1.2, sigma=0.6, size=n
             )
             amounts = np.clip(amounts, 10, 15_000)
         else:
             amounts = np.abs(
                 account_sample["account_avg_spend"].values
-                + account_sample["account_spend_stddev"].values
-                * self._rng.standard_normal(size=n)
+                + account_sample["account_spend_stddev"].values * self._rng.standard_normal(size=n)
             )
             amounts = np.clip(amounts, 0.5, 5_000)
 
@@ -459,22 +602,16 @@ class SyntheticTransactionGenerator:
         if is_fraud:
             # Fraud skews toward high-risk MCCs
             weights = [
-                self.config.high_risk_mcc_uplift if v["risk"] == "high" else 1.0
-                for v in mcc_values
+                self.config.high_risk_mcc_uplift if v["risk"] == "high" else 1.0 for v in mcc_values
             ]
         else:
-            weights = [
-                MCC_RISK_WEIGHTS[v["risk"]] * 10 for v in mcc_values
-            ]
+            weights = [MCC_RISK_WEIGHTS[v["risk"]] * 10 for v in mcc_values]
 
         total = sum(weights)
         probs = [w / total for w in weights]
         chosen_keys = self._rng.choice(mcc_keys, size=n, p=probs)
 
-        return [
-            {"mcc": k, **MCC_REGISTRY[k]}
-            for k in chosen_keys
-        ]
+        return [{"mcc": k, **MCC_REGISTRY[k]} for k in chosen_keys]
 
     def _random_timestamp(self) -> datetime:
         delta = self.config.end_date - self.config.start_date
@@ -487,21 +624,18 @@ class SyntheticTransactionGenerator:
 
     def _generate_txn_id(self) -> str:
         """Generate a unique transaction reference in format TXN-XXXXXXXX."""
-        return "TXN-" + "".join(
-            self._faker.random_letters(8)
-        ).upper()
+        _alpha = list(string.ascii_uppercase)
+        return "TXN-" + "".join(self._rng.choice(_alpha, size=8))
 
     def _generate_merchant_id(self) -> str:
         """Generate a merchant identifier."""
-        return "MER-" + "".join(
-            random.choices(string.ascii_uppercase + string.digits, k=10)
-        )
+        _alphanum = list(string.ascii_uppercase + string.digits)
+        return "MER-" + "".join(self._rng.choice(_alphanum, size=10))
 
     def _generate_swift_ref(self) -> str:
         """Generate a SWIFT message reference (20-character format)."""
-        return "SWIFT" + "".join(
-            random.choices(string.digits, k=15)
-        )
+        _digits = list(string.digits)
+        return "SWIFT" + "".join(self._rng.choice(_digits, size=15))
 
     def _generate_bic(self, country: str) -> str:
         """Generate a plausible BIC (Bank Identifier Code) for a given country.
@@ -512,8 +646,10 @@ class SyntheticTransactionGenerator:
             LL   = location code (2 alphanumeric)
             XXX  = branch code (optional, 3 alphanumeric)
         """
-        institution = "".join(random.choices(string.ascii_uppercase, k=4))
-        location = "".join(random.choices(string.ascii_uppercase + string.digits, k=2))
+        _alpha = list(string.ascii_uppercase)
+        _alphanum = list(string.ascii_uppercase + string.digits)
+        institution = "".join(self._rng.choice(_alpha, size=4))
+        location = "".join(self._rng.choice(_alphanum, size=2))
         country_code = country if country != "OTHER" else "XX"
         return f"{institution}{country_code}{location}XXX"
 
@@ -523,8 +659,10 @@ class SyntheticTransactionGenerator:
         Note: These are synthetic — check digits are not validated.
         For GB IBANs: GB + 2 check digits + 4 bank code + 6 sort + 8 account.
         """
+        _alpha = list(string.ascii_uppercase)
+        _digits = list(string.digits)
         country_code = country if country != "OTHER" else "XX"
-        check = "".join(random.choices(string.digits, k=2))
-        bank = "".join(random.choices(string.ascii_uppercase, k=4))
-        rest = "".join(random.choices(string.digits, k=14))
+        check = "".join(self._rng.choice(_digits, size=2))
+        bank = "".join(self._rng.choice(_alpha, size=4))
+        rest = "".join(self._rng.choice(_digits, size=14))
         return f"{country_code}{check}{bank}{rest}"
