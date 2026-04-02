@@ -51,9 +51,9 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/rayakindahunsi/fincrime-ml"
-Documentation = "https://github.com/rayakindahunsi/fincrime-ml/wiki"
-"Bug Tracker" = "https://github.com/rayakindahunsi/fincrime-ml/issues"
+Repository = "https://github.com/TemidayoA/fincrime-ml"
+Documentation = "https://github.com/TemidayoA/fincrime-ml/wiki"
+"Bug Tracker" = "https://github.com/TemidayoA/fincrime-ml/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -65,6 +65,8 @@ target-version = ["py311"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
 ignore = ["E501"]
 
