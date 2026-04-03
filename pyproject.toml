@@ -73,7 +73,9 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 # N803/N806: uppercase X is standard ML convention for feature matrices
 "fincrime_ml/fraud/imbalance.py" = ["N803", "N806"]
+"fincrime_ml/fraud/models/xgb_classifier.py" = ["N803", "N806"]
 "tests/test_fraud/test_imbalance.py" = ["N803", "N806"]
+"tests/test_fraud/test_xgb_classifier.py" = ["N803", "N806"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
