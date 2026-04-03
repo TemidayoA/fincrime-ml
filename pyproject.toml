@@ -70,6 +70,11 @@ line-length = 100
 select = ["E", "F", "I", "N", "W"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# N803/N806: uppercase X is standard ML convention for feature matrices
+"fincrime_ml/fraud/imbalance.py" = ["N803", "N806"]
+"tests/test_fraud/test_imbalance.py" = ["N803", "N806"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=fincrime_ml --cov-report=term-missing --cov-fail-under=80"
