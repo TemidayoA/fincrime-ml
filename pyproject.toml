@@ -74,8 +74,10 @@ ignore = ["E501"]
 # N803/N806: uppercase X is standard ML convention for feature matrices
 "fincrime_ml/fraud/imbalance.py" = ["N803", "N806"]
 "fincrime_ml/fraud/models/xgb_classifier.py" = ["N803", "N806"]
+"fincrime_ml/fraud/models/logistic_baseline.py" = ["N803", "N806"]
 "tests/test_fraud/test_imbalance.py" = ["N803", "N806"]
 "tests/test_fraud/test_xgb_classifier.py" = ["N803", "N806"]
+"tests/test_fraud/test_logistic_baseline.py" = ["N803", "N806"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
