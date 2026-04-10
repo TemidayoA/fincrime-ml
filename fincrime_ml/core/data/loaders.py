@@ -1,18 +1,26 @@
 """
 core/data/loaders.py
 ====================
-Dataset loaders and schema harmonisers for external fraud datasets.
+Dataset loaders and schema harmonisers for external financial crime datasets.
 
-Provides adapter classes that read raw CSV files from published fraud-detection
-datasets and harmonise them to the FinCrime-ML internal transaction schema,
-making them compatible with fraud pipeline feature engineering and model
-training modules.
+Provides adapter classes that read raw CSV files from published datasets and
+harmonise them to the FinCrime-ML internal transaction schema, making them
+compatible with fraud and AML pipeline feature engineering and model training.
 
 Supported datasets
 ------------------
 * **IEEE-CIS Fraud Detection** (Kaggle 2019, Vesta Corporation)
   Two-file dataset: ``train_transaction.csv`` + ``train_identity.csv``.
   Binary fraud labels; ~590 k transactions; ~3.5% fraud rate.
+  Output schema: FinCrime-ML fraud schema (``is_fraud`` label).
+
+* **PaySim Mobile Money Simulator** (Lopez-Rojas et al., 2016)
+  Simulated mobile money transactions modelled on real M-Pesa data.
+  Binary fraud labels; ~6.3 M transactions; ~0.1% fraud rate.
+  Output schema: FinCrime-ML AML schema (``is_suspicious`` label).
+  Includes mule chain annotation layer: accounts involved in fraud
+  transactions or exhibiting pass-through behaviour are flagged as
+  mule senders/receivers, enabling graph-based AML model training.
 
 No dataset files are bundled with this package. Callers must supply local file
 paths. See each loader docstring for download instructions.
@@ -25,14 +33,20 @@ pre-screening layers. The ``mcc_risk`` sentinel value ``"unknown"`` is flagged
 separately from ``"low"``/``"medium"``/``"high"`` so downstream rules can apply
 conservative treatment per JMLSG Part I Ch. 5 guidance.
 
+For PaySim: the mule annotation layer implements JMLSG Part I para 5.3.17
+guidance on identifying pass-through accounts and rapid-movement patterns
+as AML red flags. ``is_suspicious`` maps to FATF typology indicators.
+
 Author: Temidayo Akindahunsi
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -346,3 +360,400 @@ class IeeeCisLoader:
             raise ValueError(
                 f"transactions_df is missing required IEEE-CIS columns: {sorted(missing)}"
             )
+
+
+# ---------------------------------------------------------------------------
+# PaySim — column mapping constants
+# ---------------------------------------------------------------------------
+
+#: PaySim transaction type → FinCrime-ML channel.
+#: All PaySim types are mobile money channels (M-Pesa model).
+_PAYSIM_TYPE_CHANNEL_MAP: dict[str, str] = {
+    "CASH-IN": "MOBILE_APP",
+    "CASH-OUT": "MOBILE_APP",
+    "DEBIT": "MOBILE_APP",
+    "PAYMENT": "CNP_ECOM",
+    "TRANSFER": "MOBILE_APP",
+}
+
+#: PaySim transaction type → FinCrime-ML transaction_type.
+_PAYSIM_TYPE_TXN_TYPE_MAP: dict[str, str] = {
+    "CASH-IN": "DEPOSIT",
+    "CASH-OUT": "WITHDRAWAL",
+    "DEBIT": "WITHDRAWAL",
+    "PAYMENT": "PAYMENT",
+    "TRANSFER": "TRANSFER",
+}
+
+#: PaySim simulation epoch — each step represents one hour.
+#: Lopez-Rojas et al. (2016) simulate 30 days; step 1 = hour 1 of day 1.
+_PAYSIM_EPOCH: datetime = datetime(2024, 1, 1, 0, 0, 0)
+
+#: UK structuring threshold bounds (POCA 2002 s.330).
+_STRUCTURING_LOWER: float = 8_500.0
+_STRUCTURING_UPPER: float = 9_950.0
+
+#: Pass-through ratio threshold for mule account heuristic.
+#: Accounts forwarding more than this fraction of received funds are flagged.
+#: Calibrated to JMLSG Part I para 5.3.17 guidance on pass-through behaviour.
+_MULE_PASS_THROUGH_THRESHOLD: float = 0.80
+
+#: Rapid movement window in PaySim steps (1 step = 1 hour).
+#: Funds moved within this window after receipt are flagged as rapid movement.
+_RAPID_MOVEMENT_WINDOW_STEPS: int = 2
+
+#: Required columns in a raw PaySim DataFrame.
+_PAYSIM_REQUIRED_COLS: frozenset[str] = frozenset(
+    {
+        "step",
+        "type",
+        "amount",
+        "nameOrig",
+        "nameDest",
+        "isFraud",
+    }
+)
+
+#: Output columns produced by PaySimLoader after harmonisation and annotation.
+#: Compatible with SyntheticAMLGenerator.AML_SCHEMA_COLS for AML pipeline use.
+PAYSIM_AML_COLS: list[str] = [
+    "transaction_id",
+    "sender_account_id",
+    "receiver_account_id",
+    "amount_gbp",
+    "currency",
+    "channel",
+    "transaction_type",
+    "country_origin",
+    "country_destination",
+    "timestamp",
+    "hour_of_day",
+    "day_of_week",
+    "is_mule_sender",
+    "is_mule_receiver",
+    "layering_depth",
+    "typology",
+    "structuring_flag",
+    "rapid_movement_flag",
+    "is_suspicious",
+]
+
+
+class PaySimLoader:
+    """Load and harmonise the PaySim mobile money dataset with mule chain annotation.
+
+    PaySim simulates mobile financial transactions based on a sample of real
+    M-Pesa transaction data from one month in East Africa (Lopez-Rojas et al.,
+    2016). It is the primary benchmark dataset for mobile money fraud and AML
+    research, and is widely used to evaluate graph-based transaction monitoring.
+
+    **Dataset download**::
+
+        https://www.kaggle.com/datasets/ealaxi/paysim1
+        Direct: https://www.kaggle.com/datasets/ealaxi/paysim1/download
+
+    Required file: ``PS_20174392719_1491204439457_log.csv`` (single CSV,
+    ~470 MB, ~6.3 M rows).
+
+    Mule chain annotation layer
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Raw PaySim fraud labels (``isFraud``) identify individual fraudulent
+    transactions but do not annotate the intermediate mule accounts through
+    which funds are layered. This loader applies a two-signal annotation:
+
+    **Signal 1 — Fraud involvement:**
+        Any account (sender or receiver) appearing in an ``isFraud=1``
+        transaction is flagged as a mule candidate.
+
+    **Signal 2 — Pass-through behaviour:**
+        Accounts whose total outflow (TRANSFER + CASH-OUT amounts) exceeds
+        ``pass_through_threshold`` (default 80%) of their total inflow are
+        flagged as pass-through mule accounts. This implements the JMLSG
+        Part I para 5.3.17 red flag for accounts used purely as relay nodes.
+
+    The union of both signals populates ``is_mule_sender`` and
+    ``is_mule_receiver`` on every transaction row, enabling graph-based
+    AML models (``GraphScorer``) to train on mule-annotated PaySim data.
+
+    Column mapping summary
+    ~~~~~~~~~~~~~~~~~~~~~~
+    =================== ====================== ====================================
+    PaySim column       FinCrime-ML column      Notes
+    =================== ====================== ====================================
+    step                timestamp               _PAYSIM_EPOCH + step * 1 hour
+    step                hour_of_day             step mod 24
+    step                day_of_week             (step // 24) mod 7
+    type                channel                 CASH-IN/OUT/TRANSFER→MOBILE_APP
+    type                transaction_type        CASH-OUT→WITHDRAWAL, etc.
+    amount              amount_gbp              Currency unit treated as GBP
+    nameOrig            sender_account_id       as-is (C…/M… prefix retained)
+    nameDest            receiver_account_id     as-is
+    isFraud             is_suspicious           PaySim fraud = AML suspicious
+    =================== ====================== ====================================
+
+    Sentinel values for unmappable columns
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    * ``currency``            = ``"GBP"`` (unit-normalised)
+    * ``country_origin``      = ``"OTHER"`` (M-Pesa; East Africa, not in UK corridor set)
+    * ``country_destination`` = ``"OTHER"``
+    * ``layering_depth``      = ``0`` (set to 1 for direct mule-to-mule TRANSFER)
+
+    Example::
+
+        >>> loader = PaySimLoader()
+        >>> df = loader.load("data/PS_20174392719_1491204439457_log.csv")
+        >>> df.shape[1]  # columns
+        19
+        >>> round(df["is_suspicious"].mean(), 4)
+        0.0013
+    """
+
+    def load(
+        self,
+        csv_path: str | Path,
+        pass_through_threshold: float = _MULE_PASS_THROUGH_THRESHOLD,
+        nrows: int | None = None,
+    ) -> pd.DataFrame:
+        """Load PaySim CSV and return a harmonised, annotated AML DataFrame.
+
+        Args:
+            csv_path: Path to the PaySim CSV file.
+            pass_through_threshold: Outflow/inflow ratio above which an account
+                is flagged as a pass-through mule (default: 0.80).
+            nrows: If set, only load the first ``nrows`` rows. Useful for
+                development and testing with the large (~6.3 M row) PaySim file.
+
+        Returns:
+            Harmonised and mule-annotated DataFrame with columns defined in
+            ``PAYSIM_AML_COLS``.
+
+        Raises:
+            FileNotFoundError: If csv_path does not exist.
+            ValueError: If the CSV is missing required PaySim columns.
+        """
+        csv_path = Path(csv_path)
+        if not csv_path.exists():
+            raise FileNotFoundError(
+                f"PaySim CSV file not found: {csv_path}\n"
+                "Download from: https://www.kaggle.com/datasets/ealaxi/paysim1"
+            )
+        logger.info("Reading PaySim CSV: %s (nrows=%s)", csv_path, nrows)
+        raw_df = pd.read_csv(csv_path, nrows=nrows, low_memory=False)
+        return self.load_from_dataframes(raw_df, pass_through_threshold=pass_through_threshold)
+
+    def load_from_dataframes(
+        self,
+        df: pd.DataFrame,
+        pass_through_threshold: float = _MULE_PASS_THROUGH_THRESHOLD,
+    ) -> pd.DataFrame:
+        """Harmonise a pre-loaded PaySim DataFrame and apply mule annotation.
+
+        Accepts a raw PaySim DataFrame (as loaded directly from CSV) and returns
+        a harmonised, mule-annotated AML DataFrame. Useful for testing and for
+        callers managing their own I/O.
+
+        Args:
+            df: Raw PaySim DataFrame (``PS_2017…_log.csv`` schema).
+            pass_through_threshold: Outflow/inflow ratio above which an account
+                is flagged as a pass-through mule (default: 0.80).
+
+        Returns:
+            Harmonised DataFrame with columns defined in ``PAYSIM_AML_COLS``.
+
+        Raises:
+            ValueError: If df is missing required PaySim columns.
+        """
+        self._validate(df)
+
+        mule_accounts = self._identify_mule_accounts(df, pass_through_threshold)
+        rapid_movers = self._identify_rapid_movers(df)
+        harmonised = self._harmonise(df, mule_accounts, rapid_movers)
+
+        logger.info(
+            "PaySimLoader: harmonised %d rows, suspicious rate %.4f%%, mule accounts %d",
+            len(harmonised),
+            harmonised["is_suspicious"].mean() * 100,
+            len(mule_accounts),
+        )
+        return harmonised
+
+    # ------------------------------------------------------------------
+    # Private: mule annotation
+    # ------------------------------------------------------------------
+
+    def _identify_mule_accounts(self, df: pd.DataFrame, pass_through_threshold: float) -> set[str]:
+        """Identify mule accounts via fraud involvement and pass-through behaviour.
+
+        Signal 1 — fraud involvement:
+            All accounts (sender or receiver) in isFraud=1 transactions.
+
+        Signal 2 — pass-through behaviour (JMLSG para 5.3.17):
+            Accounts whose (TRANSFER + CASH-OUT outflow) / (CASH-IN + TRANSFER
+            inflow) exceeds ``pass_through_threshold``. These accounts receive
+            funds only to immediately forward them — a structural mule indicator.
+
+        Args:
+            df: Raw PaySim DataFrame.
+            pass_through_threshold: Outflow/inflow ratio threshold.
+
+        Returns:
+            Set of account identifiers flagged as mule accounts.
+        """
+        # Signal 1: accounts in flagged fraud transactions
+        fraud_rows = df[df["isFraud"] == 1]
+        fraud_accounts: set[str] = set(fraud_rows["nameOrig"].astype(str)) | set(
+            fraud_rows["nameDest"].astype(str)
+        )
+
+        # Signal 2: pass-through ratio analysis
+        # Inflow: rows where the account is nameDest in CASH-IN or TRANSFER
+        inflow_types = {"CASH-IN", "TRANSFER"}
+        outflow_types = {"CASH-OUT", "TRANSFER"}
+
+        inflow_df = df[df["type"].isin(inflow_types)][["nameDest", "amount"]]
+        inflow_df = inflow_df.rename(columns={"nameDest": "account", "amount": "inflow"})
+        total_inflow = inflow_df.groupby("account")["inflow"].sum()
+
+        outflow_df = df[df["type"].isin(outflow_types)][["nameOrig", "amount"]]
+        outflow_df = outflow_df.rename(columns={"nameOrig": "account", "amount": "outflow"})
+        total_outflow = outflow_df.groupby("account")["outflow"].sum()
+
+        flow = pd.DataFrame({"inflow": total_inflow, "outflow": total_outflow}).fillna(0.0)
+        flow["pass_through"] = np.where(flow["inflow"] > 0, flow["outflow"] / flow["inflow"], 0.0)
+        pass_through_accounts: set[str] = set(
+            flow[flow["pass_through"] >= pass_through_threshold].index.astype(str)
+        )
+
+        mule_accounts = fraud_accounts | pass_through_accounts
+        logger.debug(
+            "_identify_mule_accounts: %d fraud-involved, %d pass-through, %d total",
+            len(fraud_accounts),
+            len(pass_through_accounts),
+            len(mule_accounts),
+        )
+        return mule_accounts
+
+    def _identify_rapid_movers(self, df: pd.DataFrame) -> set[str]:
+        """Identify accounts that receive a TRANSFER and CASH-OUT within a short window.
+
+        A rapid mover receives funds via TRANSFER and exits via CASH-OUT within
+        ``_RAPID_MOVEMENT_WINDOW_STEPS`` steps (hours). This is a FATF Recommendation
+        R.10 red flag for layering — funds are moved quickly to obscure their origin.
+
+        Args:
+            df: Raw PaySim DataFrame.
+
+        Returns:
+            Set of account identifiers exhibiting rapid movement behaviour.
+        """
+        # Accounts receiving TRANSFER
+        received = df[df["type"] == "TRANSFER"][["step", "nameDest"]].rename(
+            columns={"nameDest": "account", "step": "receive_step"}
+        )
+        # Accounts sending CASH-OUT
+        sent = df[df["type"] == "CASH-OUT"][["step", "nameOrig"]].rename(
+            columns={"nameOrig": "account", "step": "send_step"}
+        )
+
+        if received.empty or sent.empty:
+            return set()
+
+        # Join on account and check if send_step is within window of receive_step
+        merged = received.merge(sent, on="account", how="inner")
+        step_diff = merged["send_step"] - merged["receive_step"]
+        rapid = merged[step_diff.between(0, _RAPID_MOVEMENT_WINDOW_STEPS)]
+        return set(rapid["account"].astype(str))
+
+    # ------------------------------------------------------------------
+    # Private: harmonisation
+    # ------------------------------------------------------------------
+
+    def _harmonise(
+        self,
+        df: pd.DataFrame,
+        mule_accounts: set[str],
+        rapid_movers: set[str],
+    ) -> pd.DataFrame:
+        """Map raw PaySim columns to the FinCrime-ML AML schema."""
+        n = len(df)
+        out = pd.DataFrame()
+
+        # --- identifiers ---
+        out["transaction_id"] = "PSIM-" + df.index.astype(str).str.zfill(10)
+        out["sender_account_id"] = df["nameOrig"].astype(str)
+        out["receiver_account_id"] = df["nameDest"].astype(str)
+
+        # --- amounts and currency ---
+        out["amount_gbp"] = pd.to_numeric(df["amount"], errors="coerce").round(2)
+        out["currency"] = "GBP"  # unit-normalised; PaySim uses generic currency units
+
+        # --- channel and transaction type ---
+        out["channel"] = df["type"].map(_PAYSIM_TYPE_CHANNEL_MAP).fillna("MOBILE_APP")
+        out["transaction_type"] = df["type"].map(_PAYSIM_TYPE_TXN_TYPE_MAP).fillna("TRANSFER")
+
+        # --- geography (PaySim = East Africa mobile money; mapped to OTHER) ---
+        out["country_origin"] = "OTHER"
+        out["country_destination"] = "OTHER"
+
+        # --- temporal features from step (1 step = 1 hour) ---
+        step = pd.to_numeric(df["step"], errors="coerce").fillna(0).astype(int)
+        out["timestamp"] = step.apply(lambda s: _PAYSIM_EPOCH + timedelta(hours=int(s)))
+        out["hour_of_day"] = step % 24
+        out["day_of_week"] = (step // 24) % 7
+
+        # --- mule annotation ---
+        sender_ids = out["sender_account_id"]
+        receiver_ids = out["receiver_account_id"]
+
+        out["is_mule_sender"] = sender_ids.isin(mule_accounts).astype(int)
+        out["is_mule_receiver"] = receiver_ids.isin(mule_accounts).astype(int)
+
+        # --- layering depth: 0 for most; 1 for mule-to-mule TRANSFER ---
+        is_mule_transfer = (
+            (df["type"] == "TRANSFER")
+            & out["is_mule_sender"].astype(bool)
+            & out["is_mule_receiver"].astype(bool)
+        )
+        out["layering_depth"] = is_mule_transfer.astype(int)
+
+        # --- typology annotation ---
+        amounts = out["amount_gbp"]
+        is_transfer = df["type"] == "TRANSFER"
+        is_cashout = df["type"] == "CASH-OUT"
+        is_fraud = pd.to_numeric(df["isFraud"], errors="coerce").fillna(0).astype(bool)
+
+        structuring = is_cashout & amounts.between(_STRUCTURING_LOWER, _STRUCTURING_UPPER)
+        layering = is_transfer & out["is_mule_sender"].astype(bool)
+        integration = is_fraud & ~layering & ~structuring
+
+        typology = pd.Series(["legitimate"] * n, index=df.index)
+        typology = typology.where(~structuring, "structuring")
+        typology = typology.where(~layering, "layering")
+        typology = typology.where(~integration, "integration")
+        out["typology"] = typology.values
+
+        # --- pattern flags ---
+        out["structuring_flag"] = structuring.astype(int)
+        out["rapid_movement_flag"] = sender_ids.isin(rapid_movers).astype(int)
+
+        # --- label: PaySim isFraud maps to AML is_suspicious ---
+        out["is_suspicious"] = pd.to_numeric(df["isFraud"], errors="coerce").fillna(0).astype(int)
+
+        return out[PAYSIM_AML_COLS].reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Private: validation
+    # ------------------------------------------------------------------
+
+    def _validate(self, df: pd.DataFrame) -> None:
+        """Check that required PaySim columns are present.
+
+        Args:
+            df: Raw PaySim DataFrame to validate.
+
+        Raises:
+            ValueError: If any required column is absent.
+        """
+        missing = _PAYSIM_REQUIRED_COLS - set(df.columns)
+        if missing:
+            raise ValueError(f"PaySim DataFrame is missing required columns: {sorted(missing)}")
