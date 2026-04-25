@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinCrime-ML · Alert Monitoring Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0d1117;
+      --surface:     #161b22;
+      --surface-2:   #1c2128;
+      --border:      #30363d;
+      --text:        #e6edf3;
+      --text-muted:  #8b949e;
+      --accent:      #388bfd;
+      --critical:    #f85149;
+      --high:        #d29922;
+      --medium:      #388bfd;
+      --low:         #3fb950;
+      --sar-yes:     #f85149;
+      --sar-no:      #3fb950;
+      --radius:      6px;
+      --shadow:      0 1px 3px rgba(0,0,0,.4);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Top nav ───────────────────────────────────────────── */
+    .nav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      font-size: 15px;
+      letter-spacing: .02em;
+    }
+    .nav-brand .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--low);
+      box-shadow: 0 0 6px var(--low);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .4; }
+    }
+    .nav-meta {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+    .nav-meta span { display: flex; align-items: center; gap: 5px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+    .badge-critical { background: rgba(248,81,73,.15);  color: var(--critical); border: 1px solid rgba(248,81,73,.3); }
+    .badge-high     { background: rgba(210,153,34,.15); color: var(--high);     border: 1px solid rgba(210,153,34,.3); }
+    .badge-medium   { background: rgba(56,139,253,.15); color: var(--medium);   border: 1px solid rgba(56,139,253,.3); }
+    .badge-low      { background: rgba(63,185,80,.15);  color: var(--low);      border: 1px solid rgba(63,185,80,.3); }
+
+    /* ── Layout ────────────────────────────────────────────── */
+    .page { max-width: 1440px; margin: 0 auto; padding: 24px; }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    /* ── KPI cards ─────────────────────────────────────────── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 900px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+    }
+    .kpi-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+    .kpi-value {
+      font-size: 32px;
+      font-weight: 700;
+      line-height: 1;
+      margin-bottom: 4px;
+    }
+    .kpi-sub { font-size: 12px; color: var(--text-muted); }
+    .kpi-card.kpi-critical .kpi-value { color: var(--critical); }
+    .kpi-card.kpi-high     .kpi-value { color: var(--high); }
+    .kpi-card.kpi-sar      .kpi-value { color: var(--sar-yes); }
+    .kpi-card.kpi-neutral  .kpi-value { color: var(--accent); }
+
+    /* ── Chart row ─────────────────────────────────────────── */
+    .chart-row {
+      display: grid;
+      grid-template-columns: 220px 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 1100px) { .chart-row { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 700px)  { .chart-row { grid-template-columns: 1fr; } }
+
+    .chart-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+    }
+    .chart-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: .04em;
+      margin-bottom: 14px;
+    }
+    .chart-wrap { position: relative; }
+    .chart-wrap-sm  { height: 180px; }
+    .chart-wrap-md  { height: 200px; }
+
+    /* ── Alert table ───────────────────────────────────────── */
+    .table-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .table-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .table-header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .table-header-title {
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .filter-btn {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .filter-btn.active, .filter-btn:hover {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+    thead th {
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+      cursor: pointer;
+      user-select: none;
+    }
+    thead th:hover { color: var(--text); }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+      cursor: pointer;
+    }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--surface-2); }
+    tbody td { padding: 10px 14px; font-size: 13px; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 12px; }
+    .score-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .score-bar-bg {
+      flex: 1;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      min-width: 60px;
+      overflow: hidden;
+    }
+    .score-bar-fill { height: 100%; border-radius: 2px; }
+    .sar-yes { color: var(--sar-yes); font-weight: 600; }
+    .sar-no  { color: var(--low);    font-weight: 600; }
+    .trigger-tag {
+      display: inline-flex;
+      align-items: center;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-size: 10px;
+      padding: 1px 6px;
+      margin: 1px 2px 1px 0;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+    .pri-1 { color: var(--critical); font-weight: 700; }
+    .pri-2 { color: var(--high);     font-weight: 700; }
+    .pri-3 { color: var(--medium);   font-weight: 600; }
+
+    /* ── SHAP panel ────────────────────────────────────────── */
+    .shap-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .shap-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      box-shadow: var(--shadow);
+    }
+    .shap-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .shap-txn { font-size: 12px; font-weight: 600; font-family: monospace; color: var(--accent); }
+    .shap-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .shap-feature {
+      width: 130px;
+      font-size: 11px;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 0;
+    }
+    .shap-bar-bg {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .shap-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+    }
+    .shap-val { font-size: 11px; color: var(--text-muted); width: 40px; text-align: right; flex-shrink: 0; }
+
+    /* ── Footer ────────────────────────────────────────────── */
+    .footer {
+      border-top: 1px solid var(--border);
+      padding: 16px 0;
+      color: var(--text-muted);
+      font-size: 11px;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    /* ── Modal ─────────────────────────────────────────────── */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-width: 680px;
+      width: 95%;
+      max-height: 80vh;
+      overflow-y: auto;
+      padding: 24px;
+    }
+    .modal-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 20px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .modal-close:hover { color: var(--text); }
+    .detail-row {
+      display: flex;
+      gap: 12px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-key { width: 160px; color: var(--text-muted); flex-shrink: 0; }
+    .detail-val { color: var(--text); flex: 1; white-space: pre-wrap; word-break: break-word; }
+  </style>
+</head>
+<body>
+
+<!-- ── Navigation ────────────────────────────────────────── -->
+<nav class="nav">
+  <div class="nav-brand">
+    <div class="dot"></div>
+    FinCrime-ML · Alert Monitoring
+  </div>
+  <div class="nav-meta">
+    <span>Model v0.1.0</span>
+    <span id="clock">--:--:-- UTC</span>
+    <span><span class="badge badge-medium">LIVE</span></span>
+  </div>
+</nav>
+
+<!-- ── Page body ─────────────────────────────────────────── -->
+<div class="page">
+
+  <!-- KPI strip -->
+  <p class="section-title">Alert Queue Summary</p>
+  <div class="kpi-grid" id="kpiGrid"></div>
+
+  <!-- Charts -->
+  <p class="section-title">Risk Profile &amp; Alert Fatigue</p>
+  <div class="chart-row">
+    <div class="chart-card">
+      <div class="chart-title">Risk Tier Distribution</div>
+      <div class="chart-wrap chart-wrap-sm"><canvas id="tierChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Alert Fatigue Curve — FPR vs Sensitivity (JMLSG para 5.3.1)</div>
+      <div class="chart-wrap chart-wrap-md"><canvas id="fatigueChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Top SAR Trigger Frequencies</div>
+      <div class="chart-wrap chart-wrap-md"><canvas id="triggerChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Alert queue table -->
+  <p class="section-title">Alert Queue</p>
+  <div class="table-card">
+    <div class="table-header">
+      <div class="table-header-left">
+        <span class="table-header-title">Active Alerts</span>
+        <span class="badge badge-critical" id="queueCount">0</span>
+      </div>
+      <div class="filter-bar">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="1">P1 Critical</button>
+        <button class="filter-btn" data-filter="2">P2 High</button>
+        <button class="filter-btn" data-filter="3">P3 Medium</button>
+        <button class="filter-btn" data-filter="sar">SAR Recommended</button>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table id="alertTable">
+        <thead>
+          <tr>
+            <th data-sort="priority">Priority</th>
+            <th data-sort="alert_id">Alert ID</th>
+            <th data-sort="transaction_id">Transaction</th>
+            <th data-sort="risk_score">Risk Score</th>
+            <th data-sort="risk_tier">Tier</th>
+            <th>Triggers</th>
+            <th data-sort="amount_gbp">Amount (GBP)</th>
+            <th data-sort="typology">Typology</th>
+            <th data-sort="sar_recommended">SAR</th>
+          </tr>
+        </thead>
+        <tbody id="alertTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- SHAP reason codes -->
+  <p class="section-title">SHAP Reason Codes — Top 6 Priority 1 Alerts</p>
+  <div class="shap-grid" id="shapGrid"></div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span>FinCrime-ML v0.1.0 · FCA SYSC 10A compliant audit trail · JMLSG Part I Ch.5 aligned</span>
+    <span>POCA 2002 s.330 · MLR 2017 Reg 28 · FATF R.10 / R.16 / R.20</span>
+  </div>
+</div>
+
+<!-- ── Detail modal ───────────────────────────────────────── -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-title">
+      <span>Alert Detail</span>
+      <button class="modal-close" id="modalClose">&times;</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   DATA — synthetic but representative alert queue output from
+   SARScorer + AMLIsolationForest + AlertFatigueEvaluator
+   ================================================================ */
+
+const ALERTS = [
+  { alert_id:"SAR-A1B2C3D4E5F6", transaction_id:"TXN-00412", risk_score:0.9421, risk_tier:"CRITICAL", priority:1, n_triggers:6, trigger_reasons:"HIGH_RISK_SCORE|STRUCTURING_AMOUNT|MULE_INVOLVEMENT|RAPID_MOVEMENT|CHAIN_LAYERING|SUSPICIOUS_TYPOLOGY", sar_recommended:1, amount_gbp:9200.00, typology:"structuring", regulatory_refs:"JMLSG Part I para 5.3.1; FCA FCG 3.2 | POCA 2002 s.330; JMLSG Part I para 5.3.11 | MLR 2017 Reg 28 | FATF R.10 | FATF R.16", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 1 (CRITICAL) | Transaction: TXN-00412 | Amount: GBP 9,200.00 | Risk Score: 0.9421 (CRITICAL) | Typology: Structuring | Triggers matched (6): High Risk Score, Structuring Amount, Mule Involvement, Rapid Movement, Chain Layering, Suspicious Typology | Structuring indicator: POCA 2002 s.330 band. Mule account involvement detected. Enhanced Due Diligence required under MLR 2017 Reg 28. Rapid fund movement detected: FATF R.10 layering indicator. Transaction is part of a multi-hop mule chain. FATF R.16 wire transfer transparency applies." },
+  { alert_id:"SAR-B2C3D4E5F6A1", transaction_id:"TXN-00187", risk_score:0.9108, risk_tier:"CRITICAL", priority:1, n_triggers:5, trigger_reasons:"HIGH_RISK_SCORE|MULE_INVOLVEMENT|RAPID_MOVEMENT|CHAIN_LAYERING|SUSPICIOUS_TYPOLOGY", sar_recommended:1, amount_gbp:14750.00, typology:"layering", regulatory_refs:"JMLSG Part I para 5.3.1; FCA FCG 3.2 | MLR 2017 Reg 28 | FATF R.10 | FATF R.16 | FATF 40 Recommendations R.20", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 1 (CRITICAL) | Transaction: TXN-00187 | Amount: GBP 14,750.00 | Risk Score: 0.9108 (CRITICAL) | Typology: Layering | Triggers matched (5): High Risk Score, Mule Involvement, Rapid Movement, Chain Layering, Suspicious Typology | Mule account involvement detected. Rapid fund movement detected. Transaction is part of a multi-hop mule chain." },
+  { alert_id:"SAR-C3D4E5F6A1B2", transaction_id:"TXN-00831", risk_score:0.8872, risk_tier:"CRITICAL", priority:1, n_triggers:4, trigger_reasons:"HIGH_RISK_SCORE|STRUCTURING_AMOUNT|CHAIN_LAYERING|SUSPICIOUS_TYPOLOGY", sar_recommended:1, amount_gbp:9650.00, typology:"structuring", regulatory_refs:"JMLSG Part I para 5.3.1 | POCA 2002 s.330 | FATF R.16 | FATF R.20", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 1 (CRITICAL) | Transaction: TXN-00831 | Amount: GBP 9,650.00 | Risk Score: 0.8872 (CRITICAL) | Typology: Structuring | Triggers matched (4): High Risk Score, Structuring Amount, Chain Layering, Suspicious Typology | Structuring indicator: POCA 2002 s.330 band (GBP 8,500-9,950). Transaction is part of a multi-hop mule chain." },
+  { alert_id:"SAR-D4E5F6A1B2C3", transaction_id:"TXN-02291", risk_score:0.8614, risk_tier:"CRITICAL", priority:1, n_triggers:3, trigger_reasons:"HIGH_RISK_SCORE|MULE_INVOLVEMENT|CHAIN_LAYERING", sar_recommended:1, amount_gbp:22100.00, typology:"integration", regulatory_refs:"JMLSG Part I para 5.3.1 | MLR 2017 Reg 28 | FATF R.16", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 1 (CRITICAL) | Transaction: TXN-02291 | Amount: GBP 22,100.00 | Risk Score: 0.8614 (CRITICAL) | Typology: Integration | Triggers matched (3): High Risk Score, Mule Involvement, Chain Layering | Mule account detected. Multi-hop chain. FATF R.16 applies." },
+  { alert_id:"SAR-E5F6A1B2C3D4", transaction_id:"TXN-00093", risk_score:0.8507, risk_tier:"CRITICAL", priority:1, n_triggers:3, trigger_reasons:"HIGH_RISK_SCORE|RAPID_MOVEMENT|CHAIN_LAYERING", sar_recommended:1, amount_gbp:8900.00, typology:"layering", regulatory_refs:"JMLSG Part I para 5.3.1 | FATF R.10 | FATF R.16", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 1 (CRITICAL) | Transaction: TXN-00093 | Amount: GBP 8,900.00 | Risk Score: 0.8507 (CRITICAL) | Typology: Layering | Triggers matched (3): High Risk Score, Rapid Movement, Chain Layering | Rapid fund movement. Multi-hop chain." },
+  { alert_id:"SAR-F6A1B2C3D4E5", transaction_id:"TXN-01144", risk_score:0.8201, risk_tier:"CRITICAL", priority:1, n_triggers:4, trigger_reasons:"HIGH_RISK_SCORE|STRUCTURING_AMOUNT|MULE_INVOLVEMENT|RAPID_MOVEMENT", sar_recommended:1, amount_gbp:8750.00, typology:"structuring", regulatory_refs:"JMLSG Part I para 5.3.1 | POCA 2002 s.330 | MLR 2017 Reg 28 | FATF R.10", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 1 (CRITICAL) | Transaction: TXN-01144 | Amount: GBP 8,750.00 | Risk Score: 0.8201 (CRITICAL) | Typology: Structuring | Structuring indicator: POCA 2002 s.330 band. Mule account detected. Rapid movement." },
+  { alert_id:"SAR-A2B3C4D5E6F7", transaction_id:"TXN-00558", risk_score:0.7814, risk_tier:"HIGH", priority:2, n_triggers:2, trigger_reasons:"HIGH_RISK_SCORE|SUSPICIOUS_TYPOLOGY", sar_recommended:1, amount_gbp:5200.00, typology:"layering", regulatory_refs:"JMLSG Part I para 5.3.1 | FATF R.20", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 2 (HIGH) | Transaction: TXN-00558 | Risk Score: 0.7814 (HIGH) | Typology: Layering | Review within 24 hours." },
+  { alert_id:"SAR-B3C4D5E6F7A2", transaction_id:"TXN-00762", risk_score:0.7502, risk_tier:"HIGH", priority:2, n_triggers:2, trigger_reasons:"HIGH_RISK_SCORE|MULE_INVOLVEMENT", sar_recommended:1, amount_gbp:11300.00, typology:"normal", regulatory_refs:"JMLSG Part I para 5.3.1 | MLR 2017 Reg 28", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 2 (HIGH) | Transaction: TXN-00762 | Risk Score: 0.7502 (HIGH) | Mule account involvement detected. Enhanced Due Diligence required." },
+  { alert_id:"SAR-C4D5E6F7A2B3", transaction_id:"TXN-01889", risk_score:0.7219, risk_tier:"HIGH", priority:2, n_triggers:2, trigger_reasons:"HIGH_RISK_SCORE|CHAIN_LAYERING", sar_recommended:1, amount_gbp:3400.00, typology:"layering", regulatory_refs:"JMLSG Part I para 5.3.1 | FATF R.16", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 2 (HIGH) | Transaction: TXN-01889 | Risk Score: 0.7219 (HIGH) | Chain layering detected." },
+  { alert_id:"SAR-D5E6F7A2B3C4", transaction_id:"TXN-03041", risk_score:0.6983, risk_tier:"HIGH", priority:2, n_triggers:1, trigger_reasons:"HIGH_RISK_SCORE", sar_recommended:1, amount_gbp:7800.00, typology:"normal", regulatory_refs:"JMLSG Part I para 5.3.1; FCA FCG 3.2", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 2 (HIGH) | Transaction: TXN-03041 | Risk Score: 0.6983 (HIGH) | High risk score threshold breached." },
+  { alert_id:"SAR-E6F7A2B3C4D5", transaction_id:"TXN-00334", risk_score:0.6741, risk_tier:"HIGH", priority:2, n_triggers:2, trigger_reasons:"STRUCTURING_AMOUNT|MULE_INVOLVEMENT", sar_recommended:0, amount_gbp:9100.00, typology:"structuring", regulatory_refs:"POCA 2002 s.330 | MLR 2017 Reg 28", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 2 (HIGH) | Transaction: TXN-00334 | Risk Score: 0.6741 | Structuring band + Mule involvement." },
+  { alert_id:"SAR-F7A2B3C4D5E6", transaction_id:"TXN-02677", risk_score:0.6512, risk_tier:"HIGH", priority:2, n_triggers:2, trigger_reasons:"RAPID_MOVEMENT|CHAIN_LAYERING", sar_recommended:0, amount_gbp:2100.00, typology:"layering", regulatory_refs:"FATF R.10 | FATF R.16", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 2 (HIGH) | Transaction: TXN-02677 | Rapid movement + chain layering." },
+  { alert_id:"SAR-A3B4C5D6E7F8", transaction_id:"TXN-04102", risk_score:0.5890, risk_tier:"MEDIUM", priority:3, n_triggers:1, trigger_reasons:"CHAIN_LAYERING", sar_recommended:0, amount_gbp:850.00, typology:"normal", regulatory_refs:"FATF R.16; JMLSG Part I para 5.3.17", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 3 (MEDIUM) | Transaction: TXN-04102 | Chain layering indicator. Review within 5 business days." },
+  { alert_id:"SAR-B4C5D6E7F8A3", transaction_id:"TXN-02904", risk_score:0.5411, risk_tier:"MEDIUM", priority:3, n_triggers:1, trigger_reasons:"SUSPICIOUS_TYPOLOGY", sar_recommended:0, amount_gbp:1200.00, typology:"structuring", regulatory_refs:"FATF 40 Recommendations R.20", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 3 (MEDIUM) | Transaction: TXN-02904 | Suspicious typology flagged." },
+  { alert_id:"SAR-C5D6E7F8A3B4", transaction_id:"TXN-01456", risk_score:0.4987, risk_tier:"MEDIUM", priority:3, n_triggers:1, trigger_reasons:"MULE_INVOLVEMENT", sar_recommended:0, amount_gbp:320.00, typology:"normal", regulatory_refs:"MLR 2017 Reg 28", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 3 (MEDIUM) | Transaction: TXN-01456 | Mule account receiver." },
+  { alert_id:"SAR-D6E7F8A3B4C5", transaction_id:"TXN-03799", risk_score:0.4612, risk_tier:"MEDIUM", priority:3, n_triggers:1, trigger_reasons:"RAPID_MOVEMENT", sar_recommended:0, amount_gbp:4500.00, typology:"normal", regulatory_refs:"FATF R.10; JMLSG Part I para 5.3.7", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 3 (MEDIUM) | Transaction: TXN-03799 | Rapid movement flag." },
+  { alert_id:"SAR-E7F8A3B4C5D6", transaction_id:"TXN-02011", risk_score:0.4299, risk_tier:"MEDIUM", priority:3, n_triggers:1, trigger_reasons:"STRUCTURING_AMOUNT", sar_recommended:0, amount_gbp:9800.00, typology:"normal", regulatory_refs:"POCA 2002 s.330; JMLSG Part I para 5.3.11", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 3 (MEDIUM) | Transaction: TXN-02011 | Amount within POCA s.330 structuring band." },
+  { alert_id:"SAR-F8A3B4C5D6E7", transaction_id:"TXN-00899", risk_score:0.4101, risk_tier:"MEDIUM", priority:3, n_triggers:1, trigger_reasons:"CHAIN_LAYERING", sar_recommended:0, amount_gbp:670.00, typology:"normal", regulatory_refs:"FATF R.16; JMLSG Part I para 5.3.17", scored_at:"2025-04-25T08:14:32", mlro_summary:"Alert Priority 3 (MEDIUM) | Transaction: TXN-00899 | Chain layering depth > 0." },
+];
+
+/* Alert fatigue curve data (AlertFatigueEvaluator output) */
+const FATIGUE_CURVE = {
+  sensitivity: [0.80, 0.85, 0.90, 0.95, 0.99],
+  fpr:         [0.042, 0.071, 0.118, 0.193, 0.341],
+  fatigue_idx: [0.312, 0.389, 0.458, 0.552, 0.701],
+};
+
+/* SHAP values for top 6 P1 alerts */
+const SHAP_DATA = [
+  { txn:"TXN-00412", tier:"CRITICAL", score:0.9421, features:[ {name:"structuring_flag",    val:0.312}, {name:"log_amount_gbp",    val:0.241}, {name:"layering_depth",    val:0.198}, {name:"is_mule_sender",    val:0.176}, {name:"rapid_movement_flag",val:0.143}, {name:"hour_of_day",        val:0.088} ] },
+  { txn:"TXN-00187", tier:"CRITICAL", score:0.9108, features:[ {name:"layering_depth",     val:0.287}, {name:"is_mule_receiver",  val:0.254}, {name:"log_amount_gbp",   val:0.198}, {name:"rapid_movement_flag",val:0.167}, {name:"hour_of_day",        val:0.101}, {name:"day_of_week",        val:0.062} ] },
+  { txn:"TXN-00831", tier:"CRITICAL", score:0.8872, features:[ {name:"structuring_flag",   val:0.341}, {name:"log_amount_gbp",   val:0.219}, {name:"layering_depth",   val:0.183}, {name:"hour_of_day",        val:0.122}, {name:"is_mule_sender",    val:0.098}, {name:"day_of_week",        val:0.051} ] },
+  { txn:"TXN-02291", tier:"CRITICAL", score:0.8614, features:[ {name:"log_amount_gbp",    val:0.298}, {name:"is_mule_sender",   val:0.267}, {name:"layering_depth",   val:0.201}, {name:"structuring_flag",   val:0.134}, {name:"hour_of_day",        val:0.092}, {name:"rapid_movement_flag",val:0.058} ] },
+  { txn:"TXN-00093", tier:"CRITICAL", score:0.8507, features:[ {name:"rapid_movement_flag",val:0.319}, {name:"layering_depth",   val:0.248}, {name:"log_amount_gbp",   val:0.187}, {name:"hour_of_day",        val:0.142}, {name:"structuring_flag",   val:0.089}, {name:"day_of_week",        val:0.055} ] },
+  { txn:"TXN-01144", tier:"CRITICAL", score:0.8201, features:[ {name:"structuring_flag",   val:0.308}, {name:"is_mule_sender",   val:0.276}, {name:"rapid_movement_flag",val:0.212}, {name:"log_amount_gbp",   val:0.148}, {name:"hour_of_day",        val:0.112}, {name:"day_of_week",        val:0.041} ] },
+];
+
+/* ================================================================
+   UTILITIES
+   ================================================================ */
+const TIER_COLOURS = { CRITICAL:"#f85149", HIGH:"#d29922", MEDIUM:"#388bfd", LOW:"#3fb950" };
+const PRI_LABELS   = { 1:"P1 · CRITICAL", 2:"P2 · HIGH", 3:"P3 · MEDIUM" };
+
+function scoreColor(s) {
+  if (s >= 0.85) return "#f85149";
+  if (s >= 0.65) return "#d29922";
+  if (s >= 0.40) return "#388bfd";
+  return "#3fb950";
+}
+
+function fmt(n, dp=2) { return Number(n).toLocaleString("en-GB", {minimumFractionDigits:dp, maximumFractionDigits:dp}); }
+
+function triggerTags(reasons) {
+  return reasons.split("|").map(r =>
+    `<span class="trigger-tag">${r.replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase())}</span>`
+  ).join("");
+}
+
+/* ================================================================
+   CLOCK
+   ================================================================ */
+function updateClock() {
+  const now = new Date();
+  document.getElementById("clock").textContent =
+    now.toUTCString().slice(17,25) + " UTC";
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+/* ================================================================
+   KPI CARDS
+   ================================================================ */
+function buildKPIs(alerts) {
+  const total   = alerts.length;
+  const p1      = alerts.filter(a => a.priority === 1).length;
+  const sarRec  = alerts.filter(a => a.sar_recommended === 1).length;
+  const mean_rs = (alerts.reduce((s,a) => s + a.risk_score, 0) / total).toFixed(4);
+
+  const cards = [
+    { label:"Total Alerts", value:total,   sub:`${p1} Priority 1 escalations`, cls:"kpi-neutral" },
+    { label:"P1 Critical",  value:p1,      sub:`${((p1/total)*100).toFixed(0)}% of queue`,    cls:"kpi-critical" },
+    { label:"SAR Recommended", value:sarRec, sub:`${((sarRec/total)*100).toFixed(0)}% SAR rate`, cls:"kpi-sar" },
+    { label:"Mean Risk Score", value:mean_rs, sub:"Across active alert queue",                  cls:"kpi-high" },
+  ];
+
+  document.getElementById("kpiGrid").innerHTML = cards.map(c => `
+    <div class="kpi-card ${c.cls}">
+      <div class="kpi-label">${c.label}</div>
+      <div class="kpi-value">${c.value}</div>
+      <div class="kpi-sub">${c.sub}</div>
+    </div>`).join("");
+
+  document.getElementById("queueCount").textContent = total + " alerts";
+}
+
+/* ================================================================
+   CHARTS
+   ================================================================ */
+function buildCharts(alerts) {
+  const tierCount = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
+  alerts.forEach(a => tierCount[a.risk_tier]++);
+
+  /* Donut — tier distribution */
+  new Chart(document.getElementById("tierChart"), {
+    type: "doughnut",
+    data: {
+      labels: ["CRITICAL","HIGH","MEDIUM","LOW"],
+      datasets: [{
+        data: [tierCount.CRITICAL, tierCount.HIGH, tierCount.MEDIUM, tierCount.LOW],
+        backgroundColor: ["#f85149","#d29922","#388bfd","#3fb950"],
+        borderWidth: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position:"bottom", labels:{ color:"#8b949e", font:{size:11}, padding:10 } },
+        tooltip: { callbacks:{ label: ctx => ` ${ctx.label}: ${ctx.parsed}` } },
+      },
+      cutout: "62%",
+    },
+  });
+
+  /* Line — alert fatigue curve */
+  new Chart(document.getElementById("fatigueChart"), {
+    type: "line",
+    data: {
+      labels: FATIGUE_CURVE.sensitivity.map(s => (s*100).toFixed(0)+"%"),
+      datasets: [
+        { label:"FPR",          data: FATIGUE_CURVE.fpr.map(v=>+(v*100).toFixed(1)),          borderColor:"#f85149", backgroundColor:"rgba(248,81,73,.08)",  fill:true,  tension:.35, pointRadius:4 },
+        { label:"Fatigue Index",data: FATIGUE_CURVE.fatigue_idx.map(v=>+(v*100).toFixed(1)),  borderColor:"#d29922", backgroundColor:"rgba(210,153,34,.08)", fill:false, tension:.35, pointRadius:4 },
+      ],
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      scales: {
+        x: { ticks:{color:"#8b949e",font:{size:11}}, grid:{color:"#21262d"}, title:{display:true,text:"Sensitivity (Recall)",color:"#8b949e",font:{size:10}} },
+        y: { ticks:{color:"#8b949e",font:{size:11},callback:v=>v+"%"}, grid:{color:"#21262d"}, title:{display:true,text:"Rate (%)",color:"#8b949e",font:{size:10}} },
+      },
+      plugins: { legend:{ labels:{color:"#8b949e",font:{size:11}} }, tooltip:{ callbacks:{ label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y}%` } } },
+    },
+  });
+
+  /* Bar — trigger frequencies */
+  const triggerFreq = {};
+  alerts.forEach(a => a.trigger_reasons.split("|").forEach(t => triggerFreq[t] = (triggerFreq[t]||0)+1));
+  const sortedTriggers = Object.entries(triggerFreq).sort((a,b)=>b[1]-a[1]);
+
+  new Chart(document.getElementById("triggerChart"), {
+    type: "bar",
+    data: {
+      labels: sortedTriggers.map(([k]) => k.replace(/_/g," ")),
+      datasets: [{ data: sortedTriggers.map(([,v])=>v), backgroundColor:"#388bfd", borderRadius:3 }],
+    },
+    options: {
+      indexAxis:"y",
+      responsive:true, maintainAspectRatio:false,
+      plugins: { legend:{display:false} },
+      scales: {
+        x: { ticks:{color:"#8b949e",font:{size:11}}, grid:{color:"#21262d"} },
+        y: { ticks:{color:"#8b949e",font:{size:10}}, grid:{display:false} },
+      },
+    },
+  });
+}
+
+/* ================================================================
+   ALERT TABLE
+   ================================================================ */
+let currentFilter = "all";
+let sortKey = "priority";
+let sortAsc  = true;
+
+function renderTable(alerts) {
+  let rows = [...alerts];
+
+  if (currentFilter !== "all") {
+    if (currentFilter === "sar") rows = rows.filter(a => a.sar_recommended === 1);
+    else rows = rows.filter(a => a.priority === +currentFilter);
+  }
+
+  rows.sort((a,b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (typeof av === "number") return sortAsc ? av-bv : bv-av;
+    return sortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  const tbody = document.getElementById("alertTbody");
+  tbody.innerHTML = rows.map(a => {
+    const c = TIER_COLOURS[a.risk_tier];
+    const pClass = ["","pri-1","pri-2","pri-3"][a.priority];
+    return `<tr data-id="${a.alert_id}">
+      <td class="${pClass}">${PRI_LABELS[a.priority]}</td>
+      <td class="mono" style="color:var(--accent)">${a.alert_id}</td>
+      <td class="mono">${a.transaction_id}</td>
+      <td>
+        <div class="score-bar-wrap">
+          <span class="mono" style="color:${scoreColor(a.risk_score)}">${a.risk_score.toFixed(4)}</span>
+          <div class="score-bar-bg"><div class="score-bar-fill" style="width:${(a.risk_score*100).toFixed(0)}%;background:${scoreColor(a.risk_score)}"></div></div>
+        </div>
+      </td>
+      <td><span class="badge badge-${a.risk_tier.toLowerCase()}">${a.risk_tier}</span></td>
+      <td>${triggerTags(a.trigger_reasons)}</td>
+      <td class="mono">£${fmt(a.amount_gbp)}</td>
+      <td style="text-transform:capitalize">${a.typology}</td>
+      <td class="${a.sar_recommended ? "sar-yes":"sar-no"}">${a.sar_recommended ? "YES":"NO"}</td>
+    </tr>`;
+  }).join("");
+
+  /* Row click → detail modal */
+  tbody.querySelectorAll("tr").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const alert = alerts.find(a => a.alert_id === tr.dataset.id);
+      if (alert) openModal(alert);
+    });
+  });
+}
+
+function setupTableControls(alerts) {
+  /* Filter buttons */
+  document.querySelectorAll(".filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      currentFilter = btn.dataset.filter;
+      renderTable(alerts);
+    });
+  });
+
+  /* Sort headers */
+  document.querySelectorAll("thead th[data-sort]").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      sortAsc = (sortKey === key) ? !sortAsc : true;
+      sortKey = key;
+      renderTable(alerts);
+    });
+  });
+}
+
+/* ================================================================
+   MODAL
+   ================================================================ */
+function openModal(alert) {
+  const body = document.getElementById("modalBody");
+  const fields = [
+    ["Alert ID",       alert.alert_id],
+    ["Transaction",    alert.transaction_id],
+    ["Risk Score",     alert.risk_score.toFixed(4)],
+    ["Risk Tier",      alert.risk_tier],
+    ["Priority",       PRI_LABELS[alert.priority]],
+    ["Triggers",       alert.trigger_reasons.replace(/\|/g, " · ")],
+    ["SAR Recommended",alert.sar_recommended ? "YES — file under POCA 2002 s.330" : "NO"],
+    ["Amount (GBP)",   "£" + fmt(alert.amount_gbp)],
+    ["Typology",       alert.typology],
+    ["Regulatory Refs",alert.regulatory_refs],
+    ["Scored At",      alert.scored_at],
+    ["MLRO Summary",   alert.mlro_summary],
+  ];
+  body.innerHTML = fields.map(([k,v]) =>
+    `<div class="detail-row"><div class="detail-key">${k}</div><div class="detail-val">${v}</div></div>`
+  ).join("");
+  document.getElementById("modalOverlay").classList.add("open");
+}
+
+document.getElementById("modalClose").addEventListener("click", () =>
+  document.getElementById("modalOverlay").classList.remove("open"));
+document.getElementById("modalOverlay").addEventListener("click", e => {
+  if (e.target === e.currentTarget) e.currentTarget.classList.remove("open");
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") document.getElementById("modalOverlay").classList.remove("open");
+});
+
+/* ================================================================
+   SHAP CARDS
+   ================================================================ */
+function buildSHAP() {
+  const maxVal = Math.max(...SHAP_DATA.flatMap(d => d.features.map(f => f.val)));
+  document.getElementById("shapGrid").innerHTML = SHAP_DATA.map(d => `
+    <div class="shap-card">
+      <div class="shap-card-header">
+        <span class="shap-txn">${d.txn}</span>
+        <span class="badge badge-${d.tier.toLowerCase()}">${d.score.toFixed(4)}</span>
+      </div>
+      ${d.features.map(f => `
+        <div class="shap-row">
+          <div class="shap-feature">${f.name}</div>
+          <div class="shap-bar-bg">
+            <div class="shap-bar-fill" style="width:${((f.val/maxVal)*100).toFixed(0)}%;background:${f.val > 0.2 ? "#f85149":"#388bfd"}"></div>
+          </div>
+          <div class="shap-val">+${f.val.toFixed(3)}</div>
+        </div>`).join("")}
+    </div>`).join("");
+}
+
+/* ================================================================
+   BOOT
+   ================================================================ */
+buildKPIs(ALERTS);
+buildCharts(ALERTS);
+renderTable(ALERTS);
+setupTableControls(ALERTS);
+buildSHAP();
+</script>
+</body>
+</html>
