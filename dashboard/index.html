@@ -116,6 +116,8 @@
       border-radius: var(--radius);
       padding: 18px 20px;
       box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
     }
     .kpi-label {
       font-size: 11px;
@@ -124,14 +126,26 @@
       text-transform: uppercase;
       color: var(--text-muted);
       margin-bottom: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .kpi-value {
-      font-size: 32px;
+      font-size: clamp(22px, 2.4vw, 32px);
       font-weight: 700;
       line-height: 1;
       margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .kpi-sub { font-size: 12px; color: var(--text-muted); }
+    .kpi-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .kpi-card.kpi-critical .kpi-value { color: var(--critical); }
     .kpi-card.kpi-high     .kpi-value { color: var(--high); }
     .kpi-card.kpi-sar      .kpi-value { color: var(--sar-yes); }
@@ -140,7 +154,7 @@
     /* ── Chart row ─────────────────────────────────────────── */
     .chart-row {
       display: grid;
-      grid-template-columns: 220px 1fr 1fr;
+      grid-template-columns: 260px 1fr 1fr;
       gap: 16px;
       margin-bottom: 24px;
     }
@@ -153,6 +167,8 @@
       border-radius: var(--radius);
       padding: 18px 20px;
       box-shadow: var(--shadow);
+      min-width: 0;
+      overflow: hidden;
     }
     .chart-title {
       font-size: 12px;
@@ -161,9 +177,9 @@
       letter-spacing: .04em;
       margin-bottom: 14px;
     }
-    .chart-wrap { position: relative; }
-    .chart-wrap-sm  { height: 180px; }
-    .chart-wrap-md  { height: 200px; }
+    .chart-wrap { position: relative; overflow: hidden; }
+    .chart-wrap-sm  { height: 200px; }
+    .chart-wrap-md  { height: 220px; }
 
     /* ── Alert table ───────────────────────────────────────── */
     .table-card {
