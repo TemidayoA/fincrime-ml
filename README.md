@@ -185,7 +185,7 @@ an issue before submitting a pull request for significant changes.
 
 ## Author
 
-**Temidayo Akindahunsi** — Chief Data Officer, fintech analytics specialist.  
+**Temidayo Akindahunsi** — Machine Learning Engineer, fintech analytics specialist.  
 Built on a foundation of production collections and credit risk data systems
 in UK FCA-regulated consumer finance.
 
