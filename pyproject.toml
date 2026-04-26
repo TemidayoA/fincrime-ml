@@ -82,6 +82,8 @@ ignore = ["E501"]
 "tests/test_fraud/test_logistic_baseline.py" = ["N803", "N806"]
 # N806: uppercase G is standard NetworkX convention for graph variables
 "fincrime_ml/aml/graph.py" = ["N806"]
+# E402/E712: notebook cells — imports after setup cells and boolean comparisons are idiomatic
+"notebooks/*.ipynb" = ["E402", "E712"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

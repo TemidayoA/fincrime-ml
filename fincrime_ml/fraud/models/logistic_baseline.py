@@ -329,7 +329,6 @@ class LogisticFraudBaseline(BasePipeline):
         """
         self._check_fitted()
 
-
         if not hasattr(xgb_clf, "model") or xgb_clf.model is None:
             raise ValueError("compare_with_xgb: xgb_clf has no fitted model.")
 
