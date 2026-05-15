@@ -1,9 +1,12 @@
 # FinCrime-ML
 
 [![CI](https://github.com/TemidayoA/fincrime-ml/actions/workflows/ci.yml/badge.svg)](https://github.com/TemidayoA/fincrime-ml/actions)
+[![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen.svg)](https://github.com/TemidayoA/fincrime-ml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Linting: ruff](https://img.shields.io/badge/linting-ruff-orange.svg)](https://github.com/astral-sh/ruff)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen.svg)](https://pre-commit.com/)
 
 A dual-domain open-source Python framework for financial crime detection — covering
 **payment fraud** and **AML transaction monitoring** — built with ML rigour and

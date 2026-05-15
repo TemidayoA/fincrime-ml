@@ -1,0 +1,53 @@
+# =============================================================================
+# FinCrime-ML · pre-commit hook configuration
+# Run: pre-commit install        (once, after cloning)
+#      pre-commit run --all-files (manual full run)
+# =============================================================================
+repos:
+  # ---------------------------------------------------------------------------
+  # Black — opinionated Python formatter
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/psf/black
+    rev: 24.3.0
+    hooks:
+      - id: black
+        language_version: python3
+        args: ["--line-length=100"]
+
+  # ---------------------------------------------------------------------------
+  # Ruff — fast Python linter (replaces flake8, isort, pyupgrade)
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.1
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+
+  # ---------------------------------------------------------------------------
+  # General hygiene
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+      - id: debug-statements
+
+  # ---------------------------------------------------------------------------
+  # pytest with coverage gate — blocks commits that break tests or drop
+  # coverage below 80 % (mirrors pyproject.toml cov-fail-under setting)
+  # ---------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: pytest-coverage
+        name: pytest (coverage gate)
+        entry: python -m pytest --tb=short -q --cov=fincrime_ml --cov-report=term-missing --cov-fail-under=80
+        language: system
+        pass_filenames: false
+        always_run: false
+        types: [python]
