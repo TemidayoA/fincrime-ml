@@ -223,6 +223,9 @@ class XGBFraudClassifier(BasePipeline):
         n_legit = len(y) - n_fraud
         scale_pos_weight = n_legit / max(n_fraud, 1)
         params = {**self.xgb_params, "scale_pos_weight": scale_pos_weight}
+        # xgboost >= 2.0 takes early_stopping_rounds at construction, not fit();
+        # both fit() call sites below supply the eval_set it requires.
+        params.setdefault("early_stopping_rounds", EARLY_STOPPING_ROUNDS)
 
         # Cross-validation harness
         self.cv_results = self._run_cv(X, y, params)

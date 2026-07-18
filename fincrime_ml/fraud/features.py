@@ -156,9 +156,14 @@ class FraudFeatureEngineer:
         out = df.copy()
         out["timestamp"] = pd.to_datetime(out["timestamp"])
 
-        # Sort by account and time to enable backward-looking window logic
+        # Sort by account and time to enable backward-looking window logic.
+        # The pre-sort index labels are carried through the sort so the
+        # original row order can genuinely be restored afterwards — features
+        # must stay positionally aligned with the caller's labels.
         original_index = out.index
-        out = out.sort_values(["account_id", "timestamp"]).reset_index(drop=True)
+        out = out.sort_values(["account_id", "timestamp"])
+        sorted_labels = out.index
+        out = out.reset_index(drop=True)
 
         for window_h in self.velocity_windows:
             count_col = f"velocity_count_{window_h}h"
@@ -167,25 +172,30 @@ class FraudFeatureEngineer:
             counts = np.zeros(len(out), dtype=np.int32)
             amounts = np.zeros(len(out), dtype=np.float64)
 
-            # Process per account group
+            # Process per account group. Timestamps are sorted within each
+            # group, so the backward-looking window [ts - W, ts) reduces to
+            # two binary searches plus a prefix-sum difference — O(n log n)
+            # per account instead of the O(n^2) per-row scan.
             for _, group in out.groupby("account_id", sort=False):
                 idx = group.index.to_numpy()
                 timestamps = group["timestamp"].to_numpy(dtype="datetime64[ns]")
                 txn_amounts = group["amount_gbp"].to_numpy(dtype=np.float64)
                 window_ns = np.timedelta64(window_h, "h")
 
-                for i, (ts, pos) in enumerate(zip(timestamps, idx)):
-                    cutoff = ts - window_ns
-                    # Count/sum transactions strictly before current ts within window
-                    mask = (timestamps[:i] >= cutoff) & (timestamps[:i] < ts)
-                    counts[pos] = int(mask.sum())
-                    amounts[pos] = float(txn_amounts[:i][mask].sum())
+                lefts = np.searchsorted(timestamps, timestamps - window_ns, side="left")
+                rights = np.searchsorted(timestamps, timestamps, side="left")
+                prefix = np.concatenate(([0.0], np.cumsum(txn_amounts)))
+
+                counts[idx] = (rights - lefts).astype(np.int32)
+                amounts[idx] = prefix[rights] - prefix[lefts]
 
             out[count_col] = counts
             out[amount_col] = np.round(amounts, 2)
 
-        # Restore original row order
-        out = out.loc[original_index].reset_index(drop=True)
+        # Restore original row order via the carried pre-sort labels
+        out.index = sorted_labels
+        out = out.loc[original_index]
+        out.index = original_index
         logger.debug(
             "add_velocity_features: added %d velocity columns",
             len(self.velocity_windows) * 2,
@@ -203,6 +213,14 @@ class FraudFeatureEngineer:
             - ``amount_over_avg_ratio``: amount_gbp / account_avg_spend. Provides a
               ratio-based alternative to the z-score; more interpretable for rule-based
               pre-screening (e.g. "amount is 5x the account average").
+
+        Point-in-time requirement: ``account_avg_spend`` and
+        ``account_spend_stddev`` are taken as given and must be computed only
+        from data strictly prior to each transaction's scoring window. Stats
+        computed over a period that includes evaluation transactions leak
+        future information into the features and inflate offline metrics.
+        (The synthetic generator satisfies this by construction — its account
+        stats are generative profile parameters, not sample statistics.)
 
         Args:
             df: DataFrame with ``amount_gbp``, ``account_avg_spend``,
