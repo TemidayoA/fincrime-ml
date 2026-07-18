@@ -5,8 +5,8 @@
 | Field | Detail |
 |---|---|
 | Document reference | MV-2026-001 |
-| Version | 1.0 |
-| Status | Final |
+| Version | 1.1 |
+| Status | Draft — illustrative; figures unverified pending a reproducible evaluation run |
 | Prepared by | FinCrime-ML Quantitative Risk Team |
 | Reviewed by | MLRO / Model Risk Committee |
 | Validation date | April 2026 |
@@ -14,6 +14,25 @@
 | Regulatory basis | PRA SS1/23 · FCA SYSC 6.3 · MLR 2017 Reg 19 · JMLSG Part I Ch.5 |
 
 ---
+
+> **Provenance and reproducibility notice (v1.1, 2026-07-18).** This report is an
+> illustrative validation template; its quantitative results have not been
+> reproduced from the committed code and must not be quoted as measured
+> performance. Specifically: (a) the fraud pipeline as committed cannot execute
+> against the harmonised IEEE-CIS output, which carries no `timestamp`,
+> `account_avg_spend`, `account_spend_stddev`, or informative `mcc_risk`
+> columns — all required by `FraudFeatureEngineer` — so the IEEE-CIS figures in
+> Sections 3–4 are not reproducible as-is; (b) early stopping, described in
+> Section 4.1, was not active in the v0.1.0 code (constant defined but never
+> wired into training; corrected 2026-07-18); (c) the cross-validation harness
+> uses a shuffled `StratifiedKFold` — a random split, appropriate for
+> hyperparameter tuning only — so CV estimates are optimistic relative to the
+> temporal holdout methodology this report describes, and only temporal-holdout
+> figures should be cited; and (d) where account-level spend statistics are
+> derived from real data, they must be computed strictly point-in-time (see
+> `fraud/features.py`), otherwise offline metrics are inflated by leakage.
+> Re-issue of this report requires a scripted, seeded evaluation run whose
+> outputs populate these tables directly.
 
 ## 1. Executive Summary
 
@@ -115,7 +134,7 @@ The logistic regression challenger is trained on the same feature set with L2 re
 
 ### 4.3 Champion Superiority Assessment
 
-The XGBoost champion outperforms the logistic challenger by 0.135 AUC-PR units on the holdout set, a margin that corresponds to approximately 27 additional true positives per 1,000 alerts generated at 90% sensitivity. At the firm's current transaction volume, this translates to an estimated 340 additional fraud cases detected per month without increasing analyst workload, quantified as an operational value of approximately £1.2M in prevented losses at a mean fraud transaction value of £3,500.
+The XGBoost champion outperforms the logistic challenger by 0.135 AUC-PR units on the holdout set, a margin that corresponds to approximately 27 additional true positives per 1,000 alerts generated at 90% sensitivity. For illustration only: at an assumed transaction volume this margin would correspond to roughly 340 additional fraud cases detected per month without increasing analyst workload, worth in the region of £1.2M in prevented losses at an assumed mean fraud transaction value of £3,500. These operational figures are worked examples on assumed volumes, not measured outcomes, and must not be quoted as realised or projected performance until recomputed from the firm's actual volumes and confirmed loss values.
 
 A two-sided DeLong test on holdout ROC-AUC confirms statistical significance of the champion's superiority (p < 0.001). The champion is therefore confirmed as the production deployment. The logistic challenger is retained in shadow mode with monthly performance reporting.
 
